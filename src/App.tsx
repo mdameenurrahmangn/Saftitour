@@ -36,7 +36,9 @@ export default function App() {
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [location, setLocation] = useState<LocationState>({ coords: null });
-  const [activeTab, setActiveTab] = useState<'chat' | 'safety' | 'explore'>('chat');
+  const [isLocationEnabled, setIsLocationEnabled] = useState(true);
+  const [activeTab, setActiveTab] = useState<'chat' | 'alerts' | 'explore' | 'history' | 'settings'>('chat');
+  const watchIdRef = useRef<number | null>(null);
   
   const chatEndRef = useRef<HTMLDivElement>(null);
 
@@ -45,27 +47,78 @@ export default function App() {
   }, [messages]);
 
   useEffect(() => {
-    requestLocation();
-  }, []);
+    if (isLocationEnabled) {
+      requestLocation();
+    } else {
+      stopLocationTracking();
+    }
+    return () => stopLocationTracking();
+  }, [isLocationEnabled]);
+
+  const stopLocationTracking = () => {
+    if (watchIdRef.current !== null) {
+      navigator.geolocation.clearWatch(watchIdRef.current);
+      watchIdRef.current = null;
+    }
+    setLocation({ coords: null });
+  };
 
   const requestLocation = () => {
-    if ("geolocation" in navigator) {
-      navigator.geolocation.getCurrentPosition(
-        (position) => {
-          setLocation({
-            coords: {
-              latitude: position.coords.latitude,
-              longitude: position.coords.longitude
-            }
-          });
-        },
-        (error) => {
-          setLocation({ coords: null, error: error.message });
-        }
-      );
-    } else {
-      setLocation({ coords: null, error: "Geolocation not supported" });
+    if (!("geolocation" in navigator)) {
+      setLocation({ coords: null, error: "Geolocation not supported by your browser." });
+      return;
     }
+
+    const options = {
+      enableHighAccuracy: true,
+      timeout: 10000,
+      maximumAge: 0
+    };
+
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        setLocation({
+          coords: {
+            latitude: position.coords.latitude,
+            longitude: position.coords.longitude
+          }
+        });
+      },
+      (error) => {
+        let errorMsg = "An unknown error occurred.";
+        switch(error.code) {
+          case error.PERMISSION_DENIED:
+            errorMsg = "Location access denied. Please enable location permissions in your browser settings.";
+            break;
+          case error.POSITION_UNAVAILABLE:
+            errorMsg = "Location information is unavailable.";
+            break;
+          case error.TIMEOUT:
+            errorMsg = "The request to get user location timed out.";
+            break;
+        }
+        setLocation({ coords: null, error: errorMsg });
+      },
+      options
+    );
+
+    // Also start watching position for updates
+    const watchId = navigator.geolocation.watchPosition(
+      (position) => {
+        setLocation({
+          coords: {
+            latitude: position.coords.latitude,
+            longitude: position.coords.longitude
+          }
+        });
+      },
+      (error) => {
+        console.warn("WatchPosition Error:", error);
+      },
+      options
+    );
+
+    watchIdRef.current = watchId;
   };
 
   const handleSend = async () => {
@@ -171,98 +224,195 @@ export default function App() {
         {/* Sidebar (Desktop) */}
         <nav className="hidden md:flex flex-col w-20 bg-white border-r border-slate-200 py-8 items-center gap-8">
           <NavIcon icon={<Shield className="w-6 h-6" />} active={activeTab === 'chat'} onClick={() => setActiveTab('chat')} />
-          <NavIcon icon={<AlertTriangle className="w-6 h-6" />} active={activeTab === 'safety'} onClick={() => setActiveTab('safety')} />
+          <NavIcon icon={<AlertTriangle className="w-6 h-6" />} active={activeTab === 'alerts'} onClick={() => setActiveTab('alerts')} />
           <NavIcon icon={<MapIcon className="w-6 h-6" />} active={activeTab === 'explore'} onClick={() => setActiveTab('explore')} />
           <div className="mt-auto flex flex-col gap-8">
-            <NavIcon icon={<History className="w-6 h-6" />} active={false} onClick={() => {}} />
-            <NavIcon icon={<Settings className="w-6 h-6" />} active={false} onClick={() => {}} />
+            <NavIcon icon={<History className="w-6 h-6" />} active={activeTab === 'history'} onClick={() => setActiveTab('history')} />
+            <NavIcon icon={<Settings className="w-6 h-6" />} active={activeTab === 'settings'} onClick={() => setActiveTab('settings')} />
           </div>
         </nav>
 
-        {/* Chat Area */}
+        {/* Dynamic Content Area */}
         <div className="flex-1 flex flex-col relative">
-          <div className="flex-1 overflow-y-auto p-4 md:p-8 space-y-6">
-            <AnimatePresence initial={false}>
-              {messages.map((msg) => (
-                <motion.div
-                  key={msg.id}
-                  initial={{ opacity: 0, y: 10 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
-                >
-                  <div className={`max-w-[85%] md:max-w-[70%] rounded-2xl p-4 shadow-sm ${
-                    msg.role === 'user' 
-                      ? 'bg-indigo-600 text-white' 
-                      : 'bg-white border border-slate-200 text-slate-800'
-                  }`}>
-                    <div className="prose prose-slate prose-sm max-w-none">
-                      <div dangerouslySetInnerHTML={{ __html: formatContent(msg.content) }} />
-                    </div>
-                    
-                    {msg.groundingMetadata?.groundingChunks && (
-                      <div className="mt-4 pt-4 border-t border-slate-100 space-y-2">
-                        <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Verified Locations</p>
-                        {msg.groundingMetadata.groundingChunks.map((chunk: any, idx: number) => (
-                          chunk.maps && (
-                            <a 
-                              key={idx}
-                              href={chunk.maps.uri}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="flex items-center gap-2 p-2 rounded-lg bg-slate-50 hover:bg-slate-100 transition-colors group"
-                            >
-                              <MapPin className="w-4 h-4 text-indigo-500" />
-                              <span className="text-xs font-medium text-slate-700 group-hover:text-indigo-600 truncate">
-                                {chunk.maps.title || 'View on Maps'}
-                              </span>
-                              <ChevronRight className="w-3 h-3 ml-auto text-slate-400" />
-                            </a>
-                          )
-                        ))}
+          {activeTab === 'chat' && (
+            <>
+              <div className="flex-1 overflow-y-auto p-4 md:p-8 space-y-6">
+                <AnimatePresence initial={false}>
+                  {messages.map((msg) => (
+                    <motion.div
+                      key={msg.id}
+                      initial={{ opacity: 0, y: 10 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
+                    >
+                      <div className={`max-w-[85%] md:max-w-[70%] rounded-2xl p-4 shadow-sm ${
+                        msg.role === 'user' 
+                          ? 'bg-indigo-600 text-white' 
+                          : 'bg-white border border-slate-200 text-slate-800'
+                      }`}>
+                        <div className="prose prose-slate prose-sm max-w-none">
+                          <div dangerouslySetInnerHTML={{ __html: formatContent(msg.content) }} />
+                        </div>
+                        
+                        {msg.groundingMetadata?.groundingChunks && (
+                          <div className="mt-4 pt-4 border-t border-slate-100 space-y-2">
+                            <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Verified Locations</p>
+                            {msg.groundingMetadata.groundingChunks.map((chunk: any, idx: number) => (
+                              chunk.maps && (
+                                <a 
+                                  key={idx}
+                                  href={chunk.maps.uri}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="flex items-center gap-2 p-2 rounded-lg bg-slate-50 hover:bg-slate-100 transition-colors group"
+                                >
+                                  <MapPin className="w-4 h-4 text-indigo-500" />
+                                  <span className="text-xs font-medium text-slate-700 group-hover:text-indigo-600 truncate">
+                                    {chunk.maps.title || 'View on Maps'}
+                                  </span>
+                                  <ChevronRight className="w-3 h-3 ml-auto text-slate-400" />
+                                </a>
+                              )
+                            ))}
+                          </div>
+                        )}
+                        
+                        <div className={`text-[10px] mt-2 opacity-50 ${msg.role === 'user' ? 'text-right' : 'text-left'}`}>
+                          {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                        </div>
                       </div>
-                    )}
-                    
-                    <div className={`text-[10px] mt-2 opacity-50 ${msg.role === 'user' ? 'text-right' : 'text-left'}`}>
-                      {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                    </motion.div>
+                  ))}
+                </AnimatePresence>
+                {isLoading && (
+                  <div className="flex justify-start">
+                    <div className="bg-white border border-slate-200 rounded-2xl p-4 flex items-center gap-3">
+                      <Loader2 className="w-4 h-4 animate-spin text-indigo-600" />
+                      <span className="text-sm text-slate-500 italic">ShieldGuide is assessing risks...</span>
                     </div>
                   </div>
-                </motion.div>
-              ))}
-            </AnimatePresence>
-            {isLoading && (
-              <div className="flex justify-start">
-                <div className="bg-white border border-slate-200 rounded-2xl p-4 flex items-center gap-3">
-                  <Loader2 className="w-4 h-4 animate-spin text-indigo-600" />
-                  <span className="text-sm text-slate-500 italic">ShieldGuide is assessing risks...</span>
+                )}
+                <div ref={chatEndRef} />
+              </div>
+
+              {/* Input Area */}
+              <div className="p-4 md:p-6 bg-white border-t border-slate-200">
+                <div className="max-w-4xl mx-auto flex gap-2">
+                  <input
+                    type="text"
+                    value={input}
+                    onChange={(e) => setInput(e.target.value)}
+                    onKeyPress={(e) => e.key === 'Enter' && handleSend()}
+                    placeholder="Ask about local scams, safe routes, or landmarks..."
+                    className="flex-1 bg-slate-100 border-none rounded-xl px-4 py-3 text-sm focus:ring-2 focus:ring-indigo-500 transition-all"
+                  />
+                  <button
+                    onClick={handleSend}
+                    disabled={!input.trim() || isLoading}
+                    className="bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-300 text-white p-3 rounded-xl transition-all active:scale-95"
+                  >
+                    <Send className="w-5 h-5" />
+                  </button>
                 </div>
               </div>
-            )}
-            <div ref={chatEndRef} />
-          </div>
+            </>
+          )}
 
-          {/* Input Area */}
-          <div className="p-4 md:p-6 bg-white border-t border-slate-200">
-            <div className="max-w-4xl mx-auto flex gap-2">
-              <input
-                type="text"
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                onKeyPress={(e) => e.key === 'Enter' && handleSend()}
-                placeholder="Ask about local scams, safe routes, or landmarks..."
-                className="flex-1 bg-slate-100 border-none rounded-xl px-4 py-3 text-sm focus:ring-2 focus:ring-indigo-500 transition-all"
-              />
-              <button
-                onClick={handleSend}
-                disabled={!input.trim() || isLoading}
-                className="bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-300 text-white p-3 rounded-xl transition-all active:scale-95"
-              >
-                <Send className="w-5 h-5" />
-              </button>
+          {activeTab === 'alerts' && (
+            <div className="flex-1 overflow-y-auto p-8 space-y-6">
+              <h2 className="text-2xl font-bold text-slate-900">Safety Alerts & Scams</h2>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <AlertCard 
+                  title="Broken Taxi Meter" 
+                  type="scam" 
+                  severity="medium"
+                  description="Common in tourist hubs. Drivers claim the meter is broken to overcharge. Always agree on a price first or use verified apps."
+                />
+                <AlertCard 
+                  title="Pickpocket Hotspot" 
+                  type="hazard" 
+                  severity="high"
+                  description="High activity reported near central transit stations. Keep valuables in front pockets or anti-theft bags."
+                />
+                <AlertCard 
+                  title="Fake Tour Guides" 
+                  type="scam" 
+                  severity="low"
+                  description="Individuals offering 'exclusive' access to landmarks. Only book through official kiosks or verified websites."
+                />
+              </div>
             </div>
-            <p className="text-[10px] text-center mt-3 text-slate-400 uppercase tracking-widest font-medium">
-              ShieldGuide: Proactive Safety Intelligence
-            </p>
-          </div>
+          )}
+
+          {activeTab === 'explore' && (
+            <div className="flex-1 overflow-y-auto p-8 space-y-6">
+              <h2 className="text-2xl font-bold text-slate-900">Safe Exploration</h2>
+              <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm">
+                <div className="flex items-center gap-3 mb-4">
+                  <MapIcon className="w-6 h-6 text-indigo-600" />
+                  <h3 className="text-lg font-bold">Verified Safe Landmarks</h3>
+                </div>
+                <div className="space-y-4">
+                  <LandmarkItem name="Central Historic District" safety="High" distance="1.2 km" />
+                  <LandmarkItem name="Riverside Walkway" safety="Medium" distance="2.5 km" />
+                  <LandmarkItem name="Museum Quarter" safety="High" distance="0.8 km" />
+                </div>
+                <button 
+                  onClick={() => handleSendWithText("Show me safe landmarks near me")}
+                  className="mt-6 w-full bg-indigo-600 text-white py-3 rounded-xl font-bold hover:bg-indigo-700 transition-all"
+                >
+                  Scan Nearby Landmarks
+                </button>
+              </div>
+            </div>
+          )}
+
+          {activeTab === 'history' && (
+            <div className="flex-1 overflow-y-auto p-8 space-y-6">
+              <h2 className="text-2xl font-bold text-slate-900">Recent Activity</h2>
+              <div className="space-y-4">
+                {messages.filter(m => m.role === 'user').map((m, i) => (
+                  <div key={i} className="bg-white p-4 rounded-xl border border-slate-200 flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <History className="w-4 h-4 text-slate-400" />
+                      <span className="text-sm font-medium text-slate-700 truncate max-w-xs">{m.content}</span>
+                    </div>
+                    <span className="text-[10px] text-slate-400">{new Date(m.timestamp).toLocaleDateString()}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {activeTab === 'settings' && (
+            <div className="flex-1 overflow-y-auto p-8 space-y-6">
+              <h2 className="text-2xl font-bold text-slate-900">Safety Settings</h2>
+              <div className="bg-white border border-slate-200 rounded-2xl p-6 space-y-6">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h4 className="text-sm font-bold text-slate-900">Live Location Tracking</h4>
+                    <p className="text-xs text-slate-500">Allow ShieldGuide to monitor your position in real-time.</p>
+                  </div>
+                  <button 
+                    onClick={() => setIsLocationEnabled(!isLocationEnabled)}
+                    className={`w-12 h-6 rounded-full transition-all relative ${isLocationEnabled ? 'bg-indigo-600' : 'bg-slate-300'}`}
+                  >
+                    <div className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-all ${isLocationEnabled ? 'left-7' : 'left-1'}`} />
+                  </button>
+                </div>
+                <div className="h-px bg-slate-100" />
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h4 className="text-sm font-bold text-slate-900">Emergency SOS Pulse</h4>
+                    <p className="text-xs text-slate-500">Enable visual pulse on SOS button for visibility.</p>
+                  </div>
+                  <button className="w-12 h-6 rounded-full bg-indigo-600 relative">
+                    <div className="absolute top-1 left-7 w-4 h-4 bg-white rounded-full" />
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Right Panel (Desktop) */}
@@ -274,44 +424,78 @@ export default function App() {
                 <SafetyAction 
                   icon={<Phone className="w-4 h-4" />} 
                   label="Local Emergency" 
-                  onClick={() => handleSendWithText("What are the local emergency numbers here?")}
+                  onClick={() => { setActiveTab('chat'); handleSendWithText("What are the local emergency numbers here?"); }}
                 />
                 <SafetyAction 
                   icon={<Navigation className="w-4 h-4" />} 
                   label="Nearest Police" 
-                  onClick={() => handleSendWithText("Where is the nearest police station?")}
+                  onClick={() => { setActiveTab('chat'); handleSendWithText("Where is the nearest police station?"); }}
                 />
                 <SafetyAction 
                   icon={<AlertTriangle className="w-4 h-4" />} 
                   label="Scam Alerts" 
-                  onClick={() => handleSendWithText("What are common scams in this area?")}
+                  onClick={() => setActiveTab('alerts')}
                 />
                 <SafetyAction 
                   icon={<Info className="w-4 h-4" />} 
                   label="Local Etiquette" 
-                  onClick={() => handleSendWithText("What is the local etiquette I should know?")}
+                  onClick={() => { setActiveTab('chat'); handleSendWithText("What is the local etiquette I should know?"); }}
                 />
               </div>
             </div>
 
-            <div className="p-4 rounded-2xl bg-indigo-50 border border-indigo-100">
+            <div className="p-4 rounded-2xl bg-indigo-50 border border-indigo-100 relative overflow-hidden">
+              {location.coords && (
+                <div className="absolute top-0 right-0 p-2">
+                  <div className="w-2 h-2 bg-emerald-500 rounded-full animate-ping" />
+                </div>
+              )}
               <div className="flex items-center gap-2 mb-2">
                 <Shield className="w-4 h-4 text-indigo-600" />
-                <h4 className="text-sm font-bold text-indigo-900">Safety Status</h4>
+                <h4 className="text-sm font-bold text-indigo-900">Live Safety Status</h4>
               </div>
-              <p className="text-xs text-indigo-700 leading-relaxed">
-                {location.coords 
-                  ? "Your GPS is active. ShieldGuide is monitoring your vicinity for known risk zones."
-                  : "Location access is disabled. Please enable GPS for real-time risk detection."}
-              </p>
-              {!location.coords && (
-                <button 
-                  onClick={requestLocation}
-                  className="mt-3 text-xs font-bold text-indigo-600 hover:text-indigo-800 flex items-center gap-1"
-                >
-                  Enable Location <ChevronRight className="w-3 h-3" />
-                </button>
-              )}
+              <div className="space-y-2">
+                <p className="text-xs text-indigo-700 leading-relaxed">
+                  {!isLocationEnabled 
+                    ? "Location tracking is currently disabled. Enable it for real-time risk monitoring."
+                    : location.coords 
+                      ? "Your live location is being monitored. ShieldGuide is scanning for nearby risks in real-time."
+                      : location.error 
+                        ? `Location Error: ${location.error}`
+                        : "Establishing secure location link..."}
+                </p>
+                
+                {location.coords && (
+                  <div className="bg-white/50 rounded-lg p-2 border border-indigo-100 flex items-center justify-between">
+                    <div className="flex flex-col">
+                      <span className="text-[9px] font-bold text-indigo-400 uppercase">Coordinates</span>
+                      <span className="text-[10px] font-mono text-indigo-900">
+                        {location.coords.latitude.toFixed(4)}°, {location.coords.longitude.toFixed(4)}°
+                      </span>
+                    </div>
+                    <a 
+                      href={`https://www.google.com/maps?q=${location.coords.latitude},${location.coords.longitude}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="p-1.5 bg-indigo-600 text-white rounded-md hover:bg-indigo-700 transition-colors"
+                      title="View on Google Maps"
+                    >
+                      <MapIcon className="w-3 h-3" />
+                    </a>
+                  </div>
+                )}
+              </div>
+
+              <button 
+                onClick={() => setIsLocationEnabled(!isLocationEnabled)}
+                className={`mt-3 w-full text-xs font-bold flex items-center justify-center gap-1 px-3 py-2 rounded-lg border shadow-sm transition-all active:scale-95 ${
+                  isLocationEnabled 
+                    ? 'bg-white text-red-600 border-red-100 hover:bg-red-50' 
+                    : 'bg-indigo-600 text-white border-indigo-500 hover:bg-indigo-700'
+                }`}
+              >
+                {isLocationEnabled ? "Disable Location" : "Enable Live Location"}
+              </button>
             </div>
 
             <div>
@@ -377,6 +561,48 @@ function TipCard({ title, content }: { title: string, content: string }) {
     <div className="p-3 rounded-xl border border-slate-100 bg-slate-50/50">
       <h4 className="text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1">{title}</h4>
       <p className="text-xs text-slate-600 leading-snug">{content}</p>
+    </div>
+  );
+}
+
+function AlertCard({ title, type, severity, description }: { title: string, type: string, severity: 'low' | 'medium' | 'high', description: string }) {
+  const severityColors = {
+    low: 'bg-blue-100 text-blue-700 border-blue-200',
+    medium: 'bg-amber-100 text-amber-700 border-amber-200',
+    high: 'bg-red-100 text-red-700 border-red-200'
+  };
+
+  return (
+    <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm space-y-3">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          {type === 'scam' ? <AlertTriangle className="w-4 h-4 text-amber-500" /> : <ShieldAlert className="w-4 h-4 text-red-500" />}
+          <h3 className="font-bold text-slate-900">{title}</h3>
+        </div>
+        <span className={`text-[10px] font-bold uppercase tracking-widest px-2 py-1 rounded-full border ${severityColors[severity]}`}>
+          {severity}
+        </span>
+      </div>
+      <p className="text-sm text-slate-600 leading-relaxed">{description}</p>
+    </div>
+  );
+}
+
+function LandmarkItem({ name, safety, distance }: { name: string, safety: string, distance: string }) {
+  return (
+    <div className="flex items-center justify-between p-3 rounded-xl hover:bg-slate-50 transition-colors border border-transparent hover:border-slate-100">
+      <div className="flex items-center gap-3">
+        <div className="w-10 h-10 rounded-lg bg-indigo-50 flex items-center justify-center">
+          <MapPin className="w-5 h-5 text-indigo-600" />
+        </div>
+        <div>
+          <h4 className="text-sm font-bold text-slate-900">{name}</h4>
+          <p className="text-[10px] text-slate-500">{distance} away</p>
+        </div>
+      </div>
+      <div className="text-right">
+        <span className="text-[10px] font-bold text-emerald-600 uppercase tracking-widest">Safety: {safety}</span>
+      </div>
     </div>
   );
 }
