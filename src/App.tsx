@@ -18,7 +18,9 @@ import {
   Map as MapIcon,
   Heart,
   History,
-  Settings
+  Settings,
+  X,
+  FileWarning
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { chatWithShieldGuide } from './services/gemini';
@@ -38,6 +40,7 @@ export default function App() {
   const [location, setLocation] = useState<LocationState>({ coords: null });
   const [isLocationEnabled, setIsLocationEnabled] = useState(true);
   const [activeTab, setActiveTab] = useState<'chat' | 'alerts' | 'explore' | 'history' | 'settings'>('chat');
+  const [showScamModal, setShowScamModal] = useState(false);
   const watchIdRef = useRef<number | null>(null);
   
   const chatEndRef = useRef<HTMLDivElement>(null);
@@ -148,10 +151,11 @@ export default function App() {
 
       setMessages(prev => [...prev, assistantMessage]);
     } catch (error) {
+      console.error("Chat Error:", error);
       const errorMessage: Message = {
         id: (Date.now() + 1).toString(),
         role: 'assistant',
-        content: "I encountered an error while processing your request. Please check your connection and try again.",
+        content: "I encountered an error while processing your request. Please check your connection or API quota and try again.",
         timestamp: Date.now()
       };
       setMessages(prev => [...prev, errorMessage]);
@@ -320,7 +324,16 @@ export default function App() {
 
           {activeTab === 'alerts' && (
             <div className="flex-1 overflow-y-auto p-8 space-y-6">
-              <h2 className="text-2xl font-bold text-slate-900">Safety Alerts & Scams</h2>
+              <div className="flex justify-between items-center">
+                <h2 className="text-2xl font-bold text-slate-900">Safety Alerts & Scams</h2>
+                <button 
+                  onClick={() => setShowScamModal(true)}
+                  className="bg-amber-100 hover:bg-amber-200 text-amber-700 px-4 py-2 rounded-xl font-bold text-sm transition-colors flex items-center gap-2"
+                >
+                  <FileWarning className="w-4 h-4" />
+                  Report Scam
+                </button>
+              </div>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <AlertCard 
                   title="Broken Taxi Meter" 
@@ -437,6 +450,16 @@ export default function App() {
                   onClick={() => setActiveTab('alerts')}
                 />
                 <SafetyAction 
+                  icon={<MapIcon className="w-4 h-4 text-emerald-600" />} 
+                  label="Safe Exploration" 
+                  onClick={() => setActiveTab('explore')}
+                />
+                <SafetyAction 
+                  icon={<FileWarning className="w-4 h-4 text-amber-600" />} 
+                  label="Report Scam" 
+                  onClick={() => setShowScamModal(true)}
+                />
+                <SafetyAction 
                   icon={<Info className="w-4 h-4" />} 
                   label="Local Etiquette" 
                   onClick={() => { setActiveTab('chat'); handleSendWithText("What is the local etiquette I should know?"); }}
@@ -514,16 +537,77 @@ export default function App() {
           </section>
         </aside>
       </main>
+
+      {/* Scam Report Modal */}
+      <AnimatePresence>
+        {showScamModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm">
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="bg-white rounded-2xl shadow-xl w-full max-w-md overflow-hidden flex flex-col"
+            >
+              <div className="p-4 border-b border-slate-100 flex items-center justify-between bg-amber-50">
+                <div className="flex items-center gap-2 text-amber-700">
+                  <FileWarning className="w-5 h-5" />
+                  <h3 className="font-bold text-lg">Report a Scam</h3>
+                </div>
+                <button onClick={() => setShowScamModal(false)} className="text-slate-400 hover:text-slate-600 p-1 rounded-lg hover:bg-white transition-colors">
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+              <div className="p-4 space-y-2 max-h-[60vh] overflow-y-auto">
+                <p className="text-sm text-slate-600 mb-4">Select the issue you're currently facing for immediate guidance:</p>
+                {[
+                  "Extra money charges for the particular destination places",
+                  "Taking through long route to increase the travel time",
+                  "Overcharging & Hidden Fees",
+                  "Transport Scams",
+                  "Tourist Traps",
+                  "Broken taxi meter or refusing to use it",
+                  "Fake tickets, tours, or guides",
+                  "Unreasonable pressure to buy items",
+                  "Other real-time problem"
+                ].map((scam, i) => (
+                  <button
+                    key={i}
+                    onClick={() => {
+                      setShowScamModal(false);
+                      setActiveTab('chat');
+                      if (scam === "Other real-time problem") {
+                        handleSendWithText("I want to report a scam. ");
+                      } else {
+                        handleSendWithText(`I want to report a real-time problem: ${scam}. What should I do right now?`);
+                      }
+                    }}
+                    className="w-full text-left p-3 rounded-xl border border-slate-100 hover:border-amber-300 hover:bg-amber-50 transition-all text-sm font-medium text-slate-700 mb-2 last:mb-0"
+                  >
+                    {scam}
+                  </button>
+                ))}
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
     </div>
   );
 
+  // Use an effect to auto-send when a specific state changes
+  const [pendingAutoSend, setPendingAutoSend] = useState(false);
+
+  useEffect(() => {
+    if (pendingAutoSend && input) {
+      handleSend();
+      setPendingAutoSend(false);
+    }
+  }, [input, pendingAutoSend]);
+
   function handleSendWithText(text: string) {
+    setActiveTab('chat');
     setInput(text);
-    // Use a timeout to ensure state updates before sending
-    setTimeout(() => {
-      const btn = document.querySelector('button[disabled="false"]') as HTMLButtonElement;
-      if (btn) btn.click();
-    }, 100);
+    setPendingAutoSend(true);
   }
 }
 
